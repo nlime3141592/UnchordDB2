@@ -5,10 +5,42 @@ namespace Unchord
     public abstract class Section
     {
 #region Persistent Data
-        public uint SectionSignature { get; set; }
-        public int SectionVersion { get; set; }
-        public int SectionSize { get; set; }
-        public int ProtectedAddressByte { get; set; } = 32;
+        public uint SectionSignature
+        {
+            get => m_sectionSignature;
+            set => m_sectionSignature = value;
+        }
+
+        public int SectionVersion
+        {
+            get => m_sectionVersion;
+            set => m_sectionVersion = value;
+        }
+
+        public int SectionSize
+        {
+            get => m_sectionSize;
+            set
+            {
+                System.Diagnostics.Debug.Assert(value > 0, "section size should be greater than 0.");
+                m_sectionSize = value;
+            }
+        }
+
+        public int ProtectedAddressByte
+        {
+            get => m_protectedAddressByte;
+            set
+            {
+                System.Diagnostics.Debug.Assert(value > 0, "protected address byte should be greater than 0.");
+                m_protectedAddressByte = value;
+            }
+        }
+
+        private uint m_sectionSignature;
+        private int m_sectionVersion;
+        private int m_sectionSize = 1;
+        private int m_protectedAddressByte = 32;
 #endregion
 
 #region Runtime Data
@@ -16,7 +48,7 @@ namespace Unchord
         public int StartPosition { get; set; }
 #endregion
 
-#region Save & Load API
+#region File Operations
         public abstract void Save(FileStream _stream);
         public abstract void Load(FileStream _stream);
 

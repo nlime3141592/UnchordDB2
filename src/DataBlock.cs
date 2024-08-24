@@ -33,8 +33,12 @@ namespace Unchord
         }
 #endregion
 
+#region Constructor
         public DataBlock(int _sectionVersion, int _sectionSize, int _dataCacheSize)
         {
+            System.Diagnostics.Debug.Assert(_sectionSize > 0, "section size should be greater than 0.");
+            System.Diagnostics.Debug.Assert(_dataCacheSize > 0, "data cache size should be greater than 0.");
+
             base.SectionSignature = (uint)(Unchord.SectionSignature.BLOCK);
             base.SectionVersion = _sectionVersion;
             base.SectionSize = _sectionSize;
@@ -65,7 +69,7 @@ namespace Unchord
         }
 
         private DataBlock()
-        : this(0, 0, 0)
+        : this(0, 1, 1)
         {
             
         }
@@ -74,6 +78,7 @@ namespace Unchord
         {
             return new DataBlock();
         }
+#endregion
 
 #region File Operations
         public override void Save(FileStream _stream)
@@ -330,6 +335,104 @@ namespace Unchord
         }
 #endregion
 
+#region Writing Data Immediate
+        public void WriteImmediateByte(int _byteIndex, byte _value)
+        {
+            byte[] bytes = { _value };
+            this.WriteImmediateBytes(_byteIndex, bytes);
+        }
+
+        public void WriteImmediateSByte(int _byteIndex, sbyte _value)
+        {
+            byte[] bytes = { (byte)_value };
+            this.WriteImmediateBytes(_byteIndex, bytes);
+        }
+
+        public void WriteImmediateChar(int _byteIndex, char _value)
+        {
+            byte[] bytes = BitConverter.GetBytes(_value);
+            this.WriteImmediateBytes(_byteIndex, bytes);
+        }
+
+        public void WriteImmediateInt16(int _byteIndex, short _value)
+        {
+            byte[] bytes = BitConverter.GetBytes(_value);
+            this.WriteImmediateBytes(_byteIndex, bytes);
+        }
+
+        public void WriteImmediateUInt16(int _byteIndex, ushort _value)
+        {
+            byte[] bytes = BitConverter.GetBytes(_value);
+            this.WriteImmediateBytes(_byteIndex, bytes);
+        }
+
+        public void WriteImmediateInt32(int _byteIndex, int _value)
+        {
+            byte[] bytes = BitConverter.GetBytes(_value);
+            this.WriteImmediateBytes(_byteIndex, bytes);
+        }
+
+        public void WriteImmediateUInt32(int _byteIndex, uint _value)
+        {
+            byte[] bytes = BitConverter.GetBytes(_value);
+            this.WriteImmediateBytes(_byteIndex, bytes);
+        }
+
+        public void WriteImmediateInt64(int _byteIndex, long _value)
+        {
+            byte[] bytes = BitConverter.GetBytes(_value);
+            this.WriteImmediateBytes(_byteIndex, bytes);
+        }
+
+        public void WriteImmediateUInt64(int _byteIndex, ulong _value)
+        {
+            byte[] bytes = BitConverter.GetBytes(_value);
+            this.WriteImmediateBytes(_byteIndex, bytes);
+        }
+
+        public void WriteImmediateSingle(int _byteIndex, float _value)
+        {
+            byte[] bytes = BitConverter.GetBytes(_value);
+            this.WriteImmediateBytes(_byteIndex, bytes);
+        }
+
+        public void WriteImmediateDouble(int _byteIndex, double _value)
+        {
+            byte[] bytes = BitConverter.GetBytes(_value);
+            this.WriteImmediateBytes(_byteIndex, bytes);
+        }
+
+        public void WriteImmediateBytes(int _byteIndex, byte[] _bytes)
+        {
+            System.Diagnostics.Debug.Assert(_byteIndex >= base.ProtectedAddressByte, "cannot access protected address space.");
+
+            m_WriteImmediateBytes(_byteIndex, _bytes);
+        }
+
+        private void m_WriteImmediateBytes(int _byteIndex, byte[] _bytes)
+        {
+            int byteIndexBeg = _byteIndex;
+            int byteIndexEnd = byteIndexBeg + _bytes.Length - 1;
+
+            System.Diagnostics.Debug.Assert(_byteIndex >= 0 && byteIndexEnd < base.SectionSize, "byte index out of range.");
+
+            FileStream fs = new FileStream(base.DataFilePath, FileMode.Open, FileAccess.Write);
+            fs.Seek(byteIndexBeg, SeekOrigin.Begin);
+            fs.Write(_bytes, 0, _bytes.Length);
+            fs.Close();
+
+            int cacheIndexBeg = this.m_loadedCacheIndex * this.DataCacheSize;
+            int cacheIndexEnd = cacheIndexBeg + this.DataCacheSize - 1;
+
+            int overlapIdxBeg = Math.Max(byteIndexBeg, cacheIndexBeg);
+            int overlapIdxEnd = Math.Min(byteIndexEnd, cacheIndexEnd);
+            int copyCount = overlapIdxEnd - overlapIdxBeg + 1;
+
+            if(copyCount > 0)
+                Buffer.BlockCopy(_bytes, Math.Max(0, overlapIdxBeg - byteIndexBeg), this.m_dataCache, overlapIdxBeg - cacheIndexBeg, copyCount);
+        }
+#endregion
+
 #region Reading Data
         public byte ReadByte(int _byteIndex)
         {
@@ -405,38 +508,47 @@ namespace Unchord
             System.Diagnostics.Debug.Assert(_byteIndex >= 0 && byteIndexEnd < base.SectionSize, "byte index out of range.");
 
             byte[] bytes = new byte[_count];
+            int ptr = 0;
+            Fragment frag = m_dataChangeHistories;
 
-            Fragment readingFragment = new Fragment();
-            readingFragment.idxBeg = byteIndexBeg;
-            readingFragment.idxEnd = byteIndexEnd;
-            readingFragment.data = null;
-            readingFragment.prev = readingFragment;
-            readingFragment.next = readingFragment;
-
-            Fragment frag = this.m_dataChangeHistories;
-            int i = byteIndexBeg;
-
-            while(i <= byteIndexEnd)
+            do
             {
-                while(i < frag.idxEnd || i > frag.idxEnd)
+                if(frag.idxEnd < byteIndexBeg)
                     frag = frag.next;
-
-                if(frag.data != null)                    
+                else if(frag.data != null)
                 {
-                    int idxBeg = Math.Max(byteIndexBeg, frag.idxBeg);
-                    int idxEnd = Math.Min(byteIndexEnd, frag.idxEnd);
+                    int idxBeg = Math.Max(byteIndexBeg, frag.idxBeg) - frag.idxBeg;
+                    int idxEnd = Math.Min(byteIndexEnd, frag.idxEnd) - frag.idxBeg;
+                    int copyCount = idxEnd - idxBeg + 1;
 
-                    int srcOffset = idxBeg - frag.idxBeg;
-                    int dstOffset = byteIndexBeg - idxBeg;
-
-                    Buffer.BlockCopy(frag.data, srcOffset, bytes, dstOffset, idxEnd - idxBeg + 1);
+                    Buffer.BlockCopy(frag.data, idxBeg, bytes, ptr, copyCount);
+                    ptr += copyCount;
                     frag = frag.next;
                 }
                 else
                 {
-                    
+                    do
+                    {
+                        int cacheIndex = (byteIndexBeg + ptr) / this.DataCacheSize;
+                        int cacheIndexBeg = cacheIndex * this.DataCacheSize;
+                        int cacheIndexEnd = cacheIndexBeg + this.DataCacheSize - 1;
+
+                        if(cacheIndex != this.m_loadedCacheIndex)
+                            this.m_LoadCache(cacheIndex, this.DataCacheSize);
+
+                        int idxBeg = this.m_Max3(frag.idxBeg, byteIndexBeg, cacheIndexBeg);
+                        int idxEnd = this.m_Min3(frag.idxEnd, byteIndexEnd, cacheIndexEnd);
+                        int copyCount = idxEnd - idxBeg + 1;
+
+                        Buffer.BlockCopy(m_dataCache, idxBeg - cacheIndexBeg, bytes, ptr, copyCount);
+                        ptr += copyCount;
+                    }
+                    while(byteIndexBeg + ptr < Math.Min(frag.idxEnd, byteIndexEnd));
+
+                    frag = frag.next;
                 }
             }
+            while(byteIndexEnd >= frag.idxBeg && frag != m_dataChangeHistories);
 
             return bytes;
         }
@@ -456,6 +568,7 @@ namespace Unchord
             System.Diagnostics.Debug.Assert(_cacheIndex * _cacheSize < base.SectionSize, "cache index out of range.");
 
             int positionOrigin = base.StartPosition + _cacheIndex * _cacheSize;
+            this.m_loadedCacheIndex = _cacheIndex;
             this.m_validByteCountOnCache = Math.Min(_cacheSize, base.SectionSize - positionOrigin);
 
             _stream.Seek(positionOrigin, SeekOrigin.Begin);
@@ -516,6 +629,7 @@ namespace Unchord
         }
 #endregion
 
+#region Code Utility
         private void m_ClearFragment(Fragment _fragment)
         {
             _fragment.idxBeg = 0;
@@ -527,47 +641,21 @@ namespace Unchord
             m_dataChangeHistories = _fragment;
         }
 
-        private void m_SplitFragmentByCache(Fragment _fragment, int _cacheSize)
+        private int m_Max3(int _a, int _b, int _c)
         {
-            Fragment frag = _fragment;
-
-            while(true)
-            {
-                int cacheIndexBeg = frag.idxBeg / _cacheSize;
-                int cacheIndexEnd = frag.idxEnd / _cacheSize;
-
-                if(cacheIndexBeg == cacheIndexEnd)
-                    break;
-
-                int idxBeg = Math.Max(frag.idxBeg, cacheIndexBeg * _cacheSize);
-                int idxEnd = Math.Min(frag.idxEnd, (cacheIndexBeg + 1) * _cacheSize - 1);
-
-                if(idxEnd < frag.idxEnd)
-                {
-                    Fragment f0 = new Fragment();
-                    f0.idxBeg = idxEnd + 1;
-                    f0.idxEnd = frag.idxEnd;
-                    frag.idxEnd = idxEnd;
-
-                    f0.prev = frag;
-                    f0.next = frag.next;
-                    frag.next.prev = f0;
-                    frag.next = f0;
-
-                    if(frag.data != null)
-                    {
-                        byte[] data = new byte[f0.idxEnd - f0.idxBeg + 1];
-                        Buffer.BlockCopy(frag.data, f0.idxBeg, data, 0, data.Length);
-                        f0.data = data;
-                    }
-
-                    frag = frag.next;
-                }
-                else
-                {
-                    frag = frag.next;
-                }
-            }
+            if(_a < _b)
+                return _b < _c ? _c : _b;
+            else
+                return _a < _c ? _c : _a;
         }
+
+        private int m_Min3(int _a, int _b, int _c)
+        {
+            if(_a < _b)
+                return _a < _c ? _a : _c;
+            else
+                return _b < _c ? _b : _c;
+        }
+#endregion
     }
 }
