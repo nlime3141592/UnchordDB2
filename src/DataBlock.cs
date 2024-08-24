@@ -33,20 +33,46 @@ namespace Unchord
         }
 #endregion
 
-        public DataBlock(int _sectionSize)
+        public DataBlock(int _sectionVersion, int _sectionSize, int _dataCacheSize)
         {
             base.SectionSignature = (uint)(Unchord.SectionSignature.BLOCK);
+            base.SectionVersion = _sectionVersion;
             base.SectionSize = _sectionSize;
+
+            this.DataCacheSize = _dataCacheSize;
 
             Fragment initialHistory = new Fragment();
             this.m_ClearFragment(initialHistory);
             m_dataChangeHistories = initialHistory;
         }
 
-        public DataBlock(DataSize _sectionSize)
-        : this((int)_sectionSize)
+        public DataBlock(int _sectionVersion, int _sectionSize, DataSize _dataCacheSize)
+        : this(_sectionVersion, _sectionSize, (int)_dataCacheSize)
         {
 
+        }
+
+        public DataBlock(int _sectionVersion, DataSize _sectionSize, int _dataCacheSize)
+        : this(_sectionVersion, (int)_sectionSize, _dataCacheSize)
+        {
+
+        }
+
+        public DataBlock(int _sectionVersion, DataSize _sectionSize, DataSize _dataCacheSize)
+        : this(_sectionVersion, (int)_sectionSize, (int)_dataCacheSize)
+        {
+
+        }
+
+        private DataBlock()
+        : this(0, 0, 0)
+        {
+            
+        }
+
+        public static DataBlock CreateEmptyBlock()
+        {
+            return new DataBlock();
         }
 
 #region File Operations
@@ -93,6 +119,18 @@ namespace Unchord
 
             this.DataCacheSize = rd.ReadInt32();
             this.m_dataCache = new byte[this.DataCacheSize];
+
+            Fragment frag = m_dataChangeHistories;
+
+            do
+            {
+                frag = frag.next;
+                frag.prev.next = null;
+                frag.prev = null;
+            }
+            while(frag != m_dataChangeHistories);
+
+            m_ClearFragment(frag);
 
             this.m_LoadCache(_stream, 0, this.DataCacheSize);
             _stream.Seek(base.StartPosition + base.SectionSize, SeekOrigin.Begin);
@@ -367,42 +405,38 @@ namespace Unchord
             System.Diagnostics.Debug.Assert(_byteIndex >= 0 && byteIndexEnd < base.SectionSize, "byte index out of range.");
 
             byte[] bytes = new byte[_count];
+
+            Fragment readingFragment = new Fragment();
+            readingFragment.idxBeg = byteIndexBeg;
+            readingFragment.idxEnd = byteIndexEnd;
+            readingFragment.data = null;
+            readingFragment.prev = readingFragment;
+            readingFragment.next = readingFragment;
+
             Fragment frag = this.m_dataChangeHistories;
+            int i = byteIndexBeg;
 
-            do
+            while(i <= byteIndexEnd)
             {
-                int idxBeg = Math.Max(byteIndexBeg, frag.idxBeg);
-                int idxEnd = Math.Min(byteIndexEnd, frag.idxEnd);
-
-                if(idxEnd - idxBeg < 0)
-                {
+                while(i < frag.idxEnd || i > frag.idxEnd)
                     frag = frag.next;
-                }
-                else if(frag.data != null)
-                {
-                    int copyCount = idxEnd - idxBeg + 1;
-                    int srcBeg = 0;
-                    int dstBeg = idxBeg - _byteIndex;
 
-                    Buffer.BlockCopy(frag.data, srcBeg, bytes, dstBeg, copyCount);
+                if(frag.data != null)                    
+                {
+                    int idxBeg = Math.Max(byteIndexBeg, frag.idxBeg);
+                    int idxEnd = Math.Min(byteIndexEnd, frag.idxEnd);
+
+                    int srcOffset = idxBeg - frag.idxBeg;
+                    int dstOffset = byteIndexBeg - idxBeg;
+
+                    Buffer.BlockCopy(frag.data, srcOffset, bytes, dstOffset, idxEnd - idxBeg + 1);
                     frag = frag.next;
                 }
                 else
                 {
-                    int copyCount = idxEnd - idxBeg + 1;
-                    int srcBeg = idxBeg % this.DataCacheSize;
-                    int dstBeg = idxBeg - _byteIndex;
-
-                    int cacheIndex = idxBeg / this.DataCacheSize;
-
-                    if(this.m_loadedCacheIndex != cacheIndex || this.m_validByteCountOnCache != this.DataCacheSize)
-                        m_LoadCache(cacheIndex, this.DataCacheSize);
-
-                    Buffer.BlockCopy(this.m_dataCache, srcBeg, bytes, dstBeg, Math.Min(copyCount, this.m_validByteCountOnCache));
-                    frag = frag.next;
+                    
                 }
             }
-            while(frag != this.m_dataChangeHistories && frag.idxBeg <= byteIndexEnd);
 
             return bytes;
         }
@@ -430,9 +464,23 @@ namespace Unchord
 #endregion
 
 #region Data Formating
-        public string GetChangesHistory()
+        public string GetChangeHistories()
         {
             return m_GetFragmentChain(m_dataChangeHistories);
+        }
+
+        public string GetSectionInfo()
+        {
+            StringBuilder strBuilder = new StringBuilder((int)DataSize.SIZE_256B);
+
+            strBuilder.AppendFormat("Block Section:\n");
+            strBuilder.AppendFormat("  - {0, -20} : {1:X08}\n", "Section Signature", base.SectionSignature);
+            strBuilder.AppendFormat("  - {0, -20} : {1}\n", "Section Version", base.SectionVersion);
+            strBuilder.AppendFormat("  - {0, -20} : {1}\n", "Section Size", base.SectionSize);
+            strBuilder.AppendFormat("  - {0, -20} : {1}\n", "Protected Address Byte", base.ProtectedAddressByte);
+            strBuilder.AppendFormat("  - {0, -20} : {1}", "Data Cache Size", this.DataCacheSize);
+
+            return strBuilder.ToString();
         }
 
         private string m_GetFragmentChain(Fragment _root)
@@ -441,11 +489,11 @@ namespace Unchord
             Fragment frag = _root;
 
             strBuilder.AppendFormat("Block Changes History:\n");
-            strBuilder.Append("  -   prev   <- ( byteIndex ) ->   next   : data\n");
+            strBuilder.Append("  -   prev   <-       current       ->   next   : data\n");
 
             do
             {
-                strBuilder.AppendFormat("  - {0:X08} <- ({1:X08}) -> {2:X08} :", frag.prev.idxBeg, frag.idxBeg, frag.next.idxBeg);
+                strBuilder.AppendFormat("  - {0:X08} <- ({1:X08}-{2:X08}) -> {3:X08} :", frag.prev.idxBeg, frag.idxBeg, frag.idxEnd, frag.next.idxBeg);
 
                 if(frag.data == null)
                 {
@@ -477,6 +525,49 @@ namespace Unchord
             _fragment.next = _fragment;
 
             m_dataChangeHistories = _fragment;
+        }
+
+        private void m_SplitFragmentByCache(Fragment _fragment, int _cacheSize)
+        {
+            Fragment frag = _fragment;
+
+            while(true)
+            {
+                int cacheIndexBeg = frag.idxBeg / _cacheSize;
+                int cacheIndexEnd = frag.idxEnd / _cacheSize;
+
+                if(cacheIndexBeg == cacheIndexEnd)
+                    break;
+
+                int idxBeg = Math.Max(frag.idxBeg, cacheIndexBeg * _cacheSize);
+                int idxEnd = Math.Min(frag.idxEnd, (cacheIndexBeg + 1) * _cacheSize - 1);
+
+                if(idxEnd < frag.idxEnd)
+                {
+                    Fragment f0 = new Fragment();
+                    f0.idxBeg = idxEnd + 1;
+                    f0.idxEnd = frag.idxEnd;
+                    frag.idxEnd = idxEnd;
+
+                    f0.prev = frag;
+                    f0.next = frag.next;
+                    frag.next.prev = f0;
+                    frag.next = f0;
+
+                    if(frag.data != null)
+                    {
+                        byte[] data = new byte[f0.idxEnd - f0.idxBeg + 1];
+                        Buffer.BlockCopy(frag.data, f0.idxBeg, data, 0, data.Length);
+                        f0.data = data;
+                    }
+
+                    frag = frag.next;
+                }
+                else
+                {
+                    frag = frag.next;
+                }
+            }
         }
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 namespace Unchord
 {
@@ -9,41 +10,41 @@ namespace Unchord
 
         public int V0
         {
-            get => m_mapDataBlock.ReadInt32(126);
-            set => m_mapDataBlock.WriteInt32(126, value);
+            get => m_dataBlocks[0].ReadInt32(126);
+            set => m_dataBlocks[0].WriteInt32(126, value);
         }
 
         public int V1
         {
-            get => m_playerDataBlock.ReadInt32(64);
-            set => m_playerDataBlock.WriteInt32(64, value);
+            get => m_dataBlocks[1].ReadInt32(64);
+            set => m_dataBlocks[1].WriteInt32(64, value);
         }
 
-        private DataBlock m_mapDataBlock;
-        private DataBlock m_playerDataBlock;
+        private List<DataBlock> m_dataBlocks;
 
         public DataFileV001(string _dataFilePath)
         : base(_dataFilePath)
         {
-
+            m_dataBlocks = new List<DataBlock>(4);
         }
 
         public override DataFile Create()
         {
-            m_mapDataBlock = new DataBlock(DataSize.SIZE_1K);
-            m_playerDataBlock = new DataBlock(DataSize.SIZE_1K);
+            m_dataBlocks.Add(new DataBlock(DataFileV001.c_FILE_VERSION, DataSize.SIZE_1K, DataSize.SIZE_128B));
+            m_dataBlocks.Add(new DataBlock(DataFileV001.c_FILE_VERSION, DataSize.SIZE_1K, DataSize.SIZE_256B));
 
-            m_mapDataBlock.SectionVersion = DataFileV001.c_FILE_VERSION;
-            m_mapDataBlock.DataCacheSize = (int)DataSize.SIZE_128B;
+            int fileSize = 0;
 
-            m_playerDataBlock.SectionVersion = DataFileV001.c_FILE_VERSION;
-            m_playerDataBlock.DataCacheSize = (int)DataSize.SIZE_256B;
+            for(int i = 0; i < m_dataBlocks.Count; ++i)
+                fileSize += m_dataBlocks[i].SectionSize;
 
             FileStream fs = new FileStream(base.DataFilePath, FileMode.Create, FileAccess.Write);
 
-            fs.SetLength((long)DataSize.SIZE_2K);
-            m_mapDataBlock.Save(fs);
-            m_playerDataBlock.Save(fs);
+            fs.SetLength((long)fileSize);
+
+            for(int i = 0; i < m_dataBlocks.Count; ++i)
+                m_dataBlocks[i].Save(fs);
+
             fs.Close();
 
             return this;
@@ -51,12 +52,18 @@ namespace Unchord
 
         public override DataFile Load()
         {
-            m_mapDataBlock = new DataBlock(DataSize.SIZE_1K);
-            m_playerDataBlock = new DataBlock(DataSize.SIZE_1K);
-
             FileStream fs = new FileStream(base.DataFilePath, FileMode.Open, FileAccess.Read);
-            m_mapDataBlock.Load(fs);
-            m_playerDataBlock.Load(fs);
+            int i = 0;
+
+            m_dataBlocks.Clear();
+
+            while(fs.Position < fs.Length)
+            {
+                m_dataBlocks.Add(DataBlock.CreateEmptyBlock());
+                m_dataBlocks[i].Load(fs);
+                ++i;
+            }
+
             fs.Close();
 
             return this;
@@ -65,10 +72,18 @@ namespace Unchord
         public override DataFile Save()
         {
             FileStream fs = new FileStream(base.DataFilePath, FileMode.Open, FileAccess.Write);
-            m_mapDataBlock.Save(fs);
-            m_playerDataBlock.Save(fs);
+            
+            for(int i = 0; i < m_dataBlocks.Count; ++i)
+                m_dataBlocks[i].Save(fs);
+
             fs.Close();
+
             return this;
+        }
+
+        public DataBlock GetBlock(int _index)
+        {
+            return m_dataBlocks[_index];
         }
     }
 }
